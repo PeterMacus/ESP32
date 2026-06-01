@@ -301,7 +301,7 @@ void loop() {
       int uvolneny_slot = cielovy_slot;  
       obsadene[uvolneny_slot] = false;
       zapis_slot(uvolneny_slot);
-      kody[uvolneny_slot] = "";
+      kody[uvolneny_slot] = "    ";
       displej("Stastnu cestu!", "Zatvaram");
       delay(2000);
       otoc_bubon(kroky_spat, true);
