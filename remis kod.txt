@@ -1,0 +1,315 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <ESP32Servo.h>
+#include <WiFi.h>
+#include <FirebaseESP32.h>
+
+#define IR_POZICIA 34
+#define IR_AUTO 27
+#define TLACIDLO 26
+#define SERVO_PIN 13
+#define SERVO_STOP 90
+#define SERVO_DOPREDU 105
+#define SERVO_DOZADU 80
+#define POCET_MIEST 5
+#define CAS_SLOT 10000
+
+#define WIFI_MENO "Bodka"
+#define WIFI_HESLO "hotspot."
+#define DATABAZA_URL "bubnovagaraz-default-rtdb.europe-west1.firebasedatabase.app"
+#define DATABAZA_KLUC "AIzaSyB_zI46x4fn8_b_qgdFib3KtylPs5D9Kww"
+
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+Servo servo;
+FirebaseData fb;
+FirebaseAuth fb_auth;
+FirebaseConfig fb_konfig;
+
+int aktualny_slot = 0;
+int kroky_spat = 0;
+int rezim = 0;
+int cielovy_slot = -1;
+
+bool obsadene[6] = {false, false, false, false, false, false};
+String kody[6] = {"", "", "", "", "", ""};
+
+void IRAM_ATTR impulz() {}
+
+void displej(String riadok1, String riadok2) {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print(riadok1);
+  lcd.setCursor(0, 1);
+  lcd.print(riadok2);
+}
+
+bool tlacidlo_stlacene() {
+  if (digitalRead(TLACIDLO) == LOW) {
+    delay(50);
+    if (digitalRead(TLACIDLO) == LOW) {
+      while (digitalRead(TLACIDLO) == LOW) delay(10);
+      return true;
+    }
+  }
+  return false;
+}
+
+int vypocitaj_kroky(int kam) {
+  if (kam == aktualny_slot) return 0;
+  int rozdiel = kam - aktualny_slot;
+  if (rozdiel < 0) rozdiel = rozdiel + 6;
+  return rozdiel;
+}
+
+int najdi_volny() {
+  for (int i = 1; i <= POCET_MIEST; i++) {
+    if (obsadene[i] == false) return i;
+  }
+  return -1;
+}
+
+int pocet_volnych() {
+  int volne = 0;
+  for (int i = 1; i <= POCET_MIEST; i++) {
+    if (obsadene[i] == false) volne++;
+  }
+  return volne;
+}
+
+String novy_kod() {
+  String kod = "";
+  bool ok = false;
+  while (ok == false) {
+    kod = String(random(1000, 9999));
+    ok = true;
+    for (int i = 1; i <= POCET_MIEST; i++) {
+      if (kody[i] == kod) ok = false;
+    }
+  }
+  return kod;
+}
+
+void otoc_bubon(int kroky, bool dozadu) {
+  if (kroky <= 0) return;
+  detachInterrupt(digitalPinToInterrupt(IR_POZICIA));
+
+  int napocitane = 0;
+  bool predosly = HIGH;
+  bool cakam = false;
+
+  if (dozadu == true) {
+    servo.write(SERVO_DOZADU);
+  } else {
+    servo.write(SERVO_DOPREDU);
+  }
+  delay(400);
+
+  unsigned long max_cas = millis() + (kroky * (unsigned long)CAS_SLOT);
+
+  while (napocitane < kroky) {
+    if (millis() > max_cas) break;
+    bool teraz = digitalRead(IR_POZICIA);
+    if (cakam == false && predosly == HIGH && teraz == LOW) {
+      napocitane++;
+      cakam = true;
+    }
+    if (cakam == true && teraz == HIGH) {
+      cakam = false;
+      delay(15);
+    }
+    predosly = teraz;
+    delay(2);
+  }
+
+  servo.write(SERVO_STOP);
+  delay(400);
+  if (dozadu == false) kroky_spat = napocitane;
+  attachInterrupt(digitalPinToInterrupt(IR_POZICIA), impulz, FALLING);
+}
+
+void zapis_slot(int s) {
+  Firebase.setBool(fb, "/sloty/" + String(s) + "/obsadene", obsadene[s]);
+  delay(100);
+  Firebase.setString(fb, "/sloty/" + String(s) + "/kod", kody[s]);
+  delay(100);
+}
+
+void skontroluj_web() {
+  if (rezim != 0) return;
+  if (Firebase.getString(fb, "/akcia")) {
+    String prikaz = fb.stringData();
+    if (prikaz == "vystup") {
+      if (Firebase.getInt(fb, "/akciaSlot")) {
+        int slot = fb.intData();
+        if (slot >= 1 && slot <= 5 && obsadene[slot] == true) {
+          Firebase.setString(fb, "/akcia", "");
+          Firebase.setInt(fb, "/akciaSlot", 0);
+          cielovy_slot = slot;
+          displej("Otvaram", "slot " + String(slot));
+          otoc_bubon(vypocitaj_kroky(cielovy_slot), false);
+          aktualny_slot = cielovy_slot;
+          displej("Vyparkujte", "cakam na auto");
+          rezim = 3;
+        }
+      }
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+  Serial.println("start");
+
+  pinMode(IR_POZICIA, INPUT);
+  pinMode(IR_AUTO, INPUT);
+  pinMode(TLACIDLO, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(IR_POZICIA), impulz, FALLING);
+
+  lcd.init();
+  lcd.backlight();
+  servo.attach(SERVO_PIN);
+  servo.write(SERVO_STOP);
+  randomSeed(esp_random());
+
+  displej("Pripajam", "");
+  WiFi.begin(WIFI_MENO, WIFI_HESLO);
+  int pripoj = 0;
+  while (WiFi.status() != WL_CONNECTED && pripoj < 20) {
+    delay(500);
+    pripoj++;
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("wifi ok");
+  } else {
+    Serial.println("wifi nefungíros");
+  }
+
+  fb_konfig.host = DATABAZA_URL;
+  fb_konfig.signer.tokens.legacy_token = DATABAZA_KLUC;
+  Firebase.begin(&fb_konfig, &fb_auth);
+  Firebase.reconnectWiFi(true);
+  Serial.println("Zapinam databazu");
+  Firebase.setString(fb, "/akcia", "");
+  Firebase.setInt(fb, "/akciaSlot", 0);
+  for (int i = 1; i <= 5; i++) {
+    Firebase.setBool(fb, "/sloty/" + String(i) + "/obsadene", false);
+    Firebase.setString(fb, "/sloty/" + String(i) + "/kod", "    ");
+    delay(50); 
+  }
+  Serial.println("Databaza vycistena");
+  displej("Garaz ready", "Stlac tlacidlo");
+  
+}
+
+void loop() {
+  static unsigned long web_timer = 0;
+  if (millis() - web_timer > 2000) {
+    web_timer = millis();
+    skontroluj_web();
+  }
+
+ if (rezim == 0) {
+    if (tlacidlo_stlacene()) {
+      int volne = pocet_volnych();
+      if (volne == 0) {
+        displej("Garaze plne!", "Skuste neskor");
+        delay(3000);
+        displej("Garaz ready", "Stlac tlacidlo");
+        return;
+      } 
+      displej("Volnych miest:", String(volne));
+      delay(1500);
+      cielovy_slot = najdi_volny();
+      kody[cielovy_slot] = novy_kod(); 
+      
+      displej("Otacam", "slot " + String(cielovy_slot));
+      otoc_bubon(vypocitaj_kroky(cielovy_slot), false);
+      aktualny_slot = cielovy_slot;
+      
+      displej("Parkujte!", "cakam na auto");
+      rezim = 1;
+    }
+    return;
+  }
+
+ if (rezim == 1) {
+    static unsigned long t1 = 0;
+    if (t1 == 0) t1 = millis();
+
+    if (digitalRead(IR_AUTO) == LOW) {
+      obsadene[cielovy_slot] = true; 
+      displej("Auto voslo!", "Stlac tlacidlo");
+      rezim = 2;
+      t1 = 0;
+      return;
+    }
+
+    if (millis() - t1 > 30000) {
+      kody[cielovy_slot] = ""; 
+      displej("Cas vyprsal", "Zatvaram");
+      delay(1500);
+      otoc_bubon(kroky_spat, true);
+      aktualny_slot = 0;
+      rezim = 0;
+      t1 = 0;
+      displej("Garaz ready", "Stlac tlacidlo");
+    }
+    return;
+  }
+
+  if (rezim == 2) {
+    if (tlacidlo_stlacene()) { 
+      zapis_slot(cielovy_slot); 
+      displej("Vas kod:", kody[cielovy_slot]);
+      delay(5000);
+      displej("Zatvaram", "");
+      otoc_bubon(kroky_spat, true);
+      aktualny_slot = 0;
+      rezim = 0;
+      displej("Garaz ready", "Stlac tlacidlo");
+    }
+    return;
+  }
+
+  if (rezim == 3) {
+    static unsigned long t3 = 0;
+    if (t3 == 0) t3 = millis();
+    if (digitalRead(IR_AUTO) == LOW) {
+      displej("Auto vyslo!", "Stlac tlacidlo");
+      rezim = 4;
+      t3 = 0;
+      return;
+    }
+    if (millis() - t3 > 30000) {
+      Serial.print("Navrat domov, krokov: ");
+      Serial.println(kroky_spat);
+      displej("Cas vyprsal", "Zatvaram");
+      delay(1500);
+      otoc_bubon(kroky_spat, true);
+      aktualny_slot = 0;
+      rezim = 0;
+      t3 = 0;
+      displej("Garaz ready", "Stlac tlacidlo");
+    }
+    return;
+  }
+
+ if (rezim == 4) {
+    if (tlacidlo_stlacene()) {
+      int uvolneny_slot = cielovy_slot;  
+      obsadene[uvolneny_slot] = false;
+      zapis_slot(uvolneny_slot);
+      kody[uvolneny_slot] = "";
+      displej("Stastnu cestu!", "Zatvaram");
+      delay(2000);
+      otoc_bubon(kroky_spat, true);
+      aktualny_slot = 0;
+      cielovy_slot = -1;
+      rezim = 0;
+      displej("Garaz ready", "Stlac tlacidlo");
+    }
+    return;
+  }
+}
