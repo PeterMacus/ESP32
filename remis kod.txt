@@ -9,8 +9,8 @@
 #define TLACIDLO 26
 #define SERVO_PIN 13
 #define SERVO_STOP 90
-#define SERVO_DOPREDU 105
-#define SERVO_DOZADU 80
+#define SERVO_DOPREDU 95
+#define SERVO_DOZADU 85
 #define POCET_MIEST 5
 #define CAS_SLOT 10000
 
@@ -300,8 +300,8 @@ void loop() {
     if (tlacidlo_stlacene()) {
       int uvolneny_slot = cielovy_slot;  
       obsadene[uvolneny_slot] = false;
-      zapis_slot(uvolneny_slot);
       kody[uvolneny_slot] = "    ";
+      zapis_slot(uvolneny_slot);
       displej("Stastnu cestu!", "Zatvaram");
       delay(2000);
       otoc_bubon(kroky_spat, true);
