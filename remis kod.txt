@@ -9,8 +9,8 @@
 #define TLACIDLO 26
 #define SERVO_PIN 13
 #define SERVO_STOP 90
-#define SERVO_DOPREDU 95
-#define SERVO_DOZADU 85
+#define SERVO_DOPREDU 105
+#define SERVO_DOZADU 80
 #define POCET_MIEST 5
 #define CAS_SLOT 10000
 
@@ -89,6 +89,14 @@ String novy_kod() {
   return kod;
 }
 
+
+int oprav_kroky_spat(int slot, int kroky) {
+  if (slot == 2) {
+    return kroky + 0;
+  }
+  return kroky;
+}
+
 void otoc_bubon(int kroky, bool dozadu) {
   if (kroky <= 0) return;
   detachInterrupt(digitalPinToInterrupt(IR_POZICIA));
@@ -103,6 +111,12 @@ void otoc_bubon(int kroky, bool dozadu) {
     servo.write(SERVO_DOPREDU);
   }
   delay(400);
+
+  
+  if (dozadu == true) {
+    unsigned long cakaj_max = millis() + 3000;
+    while (digitalRead(IR_POZICIA) == LOW && millis() < cakaj_max) delay(2);
+  }
 
   unsigned long max_cas = millis() + (kroky * (unsigned long)CAS_SLOT);
 
@@ -196,11 +210,10 @@ void setup() {
   for (int i = 1; i <= 5; i++) {
     Firebase.setBool(fb, "/sloty/" + String(i) + "/obsadene", false);
     Firebase.setString(fb, "/sloty/" + String(i) + "/kod", "    ");
-    delay(50); 
+    delay(50);
   }
   Serial.println("Databaza vycistena");
   displej("Garaz ready", "Stlac tlacidlo");
-  
 }
 
 void loop() {
@@ -210,7 +223,7 @@ void loop() {
     skontroluj_web();
   }
 
- if (rezim == 0) {
+  if (rezim == 0) {
     if (tlacidlo_stlacene()) {
       int volne = pocet_volnych();
       if (volne == 0) {
@@ -218,28 +231,28 @@ void loop() {
         delay(3000);
         displej("Garaz ready", "Stlac tlacidlo");
         return;
-      } 
+      }
       displej("Volnych miest:", String(volne));
       delay(1500);
       cielovy_slot = najdi_volny();
-      kody[cielovy_slot] = novy_kod(); 
-      
+      kody[cielovy_slot] = novy_kod();
+
       displej("Otacam", "slot " + String(cielovy_slot));
       otoc_bubon(vypocitaj_kroky(cielovy_slot), false);
       aktualny_slot = cielovy_slot;
-      
+
       displej("Parkujte!", "cakam na auto");
       rezim = 1;
     }
     return;
   }
 
- if (rezim == 1) {
+  if (rezim == 1) {
     static unsigned long t1 = 0;
     if (t1 == 0) t1 = millis();
 
     if (digitalRead(IR_AUTO) == LOW) {
-      obsadene[cielovy_slot] = true; 
+      obsadene[cielovy_slot] = true;
       displej("Auto voslo!", "Stlac tlacidlo");
       rezim = 2;
       t1 = 0;
@@ -247,10 +260,10 @@ void loop() {
     }
 
     if (millis() - t1 > 30000) {
-      kody[cielovy_slot] = ""; 
+      kody[cielovy_slot] = "";
       displej("Cas vyprsal", "Zatvaram");
       delay(1500);
-      otoc_bubon(kroky_spat, true);
+      otoc_bubon(oprav_kroky_spat(cielovy_slot, kroky_spat), true);
       aktualny_slot = 0;
       rezim = 0;
       t1 = 0;
@@ -260,12 +273,12 @@ void loop() {
   }
 
   if (rezim == 2) {
-    if (tlacidlo_stlacene()) { 
-      zapis_slot(cielovy_slot); 
+    if (tlacidlo_stlacene()) {
+      zapis_slot(cielovy_slot);
       displej("Vas kod:", kody[cielovy_slot]);
       delay(5000);
       displej("Zatvaram", "");
-      otoc_bubon(kroky_spat, true);
+      otoc_bubon(oprav_kroky_spat(cielovy_slot, kroky_spat), true);
       aktualny_slot = 0;
       rezim = 0;
       displej("Garaz ready", "Stlac tlacidlo");
@@ -287,7 +300,7 @@ void loop() {
       Serial.println(kroky_spat);
       displej("Cas vyprsal", "Zatvaram");
       delay(1500);
-      otoc_bubon(kroky_spat, true);
+      otoc_bubon(oprav_kroky_spat(cielovy_slot, kroky_spat), true);
       aktualny_slot = 0;
       rezim = 0;
       t3 = 0;
@@ -296,15 +309,15 @@ void loop() {
     return;
   }
 
- if (rezim == 4) {
+  if (rezim == 4) {
     if (tlacidlo_stlacene()) {
-      int uvolneny_slot = cielovy_slot;  
+      int uvolneny_slot = cielovy_slot;
       obsadene[uvolneny_slot] = false;
       kody[uvolneny_slot] = "    ";
       zapis_slot(uvolneny_slot);
       displej("Stastnu cestu!", "Zatvaram");
       delay(2000);
-      otoc_bubon(kroky_spat, true);
+      otoc_bubon(oprav_kroky_spat(cielovy_slot, kroky_spat), true);
       aktualny_slot = 0;
       cielovy_slot = -1;
       rezim = 0;
